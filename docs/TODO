@@ -18,6 +18,18 @@
       files ) and brute it
 
 
+===> 1.4.3
+
+  [x] bugfix: fixed Python's "SyntaxWarning"
+  [x] updated COPYRIGHT info
+
+
+===> 1.4.2
+
+  [x] bugfix: banner option
+  [x] updated lists/*
+
+
 ===> 1.4.1
 
   [x] updated help() and README.md (old options were present)

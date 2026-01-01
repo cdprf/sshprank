@@ -38,7 +38,7 @@ from collections import deque
 
 
 __author__ = 'noptrix'
-__version__ = '1.4.2'
+__version__ = '1.4.3'
 __copyright = 'santa clause'
 __license__ = 'MIT'
 
@@ -53,7 +53,7 @@ GREEN = '\033[1;32;10m'
 YELLOW = '\033[1;33;10m'
 BLUE = '\033[1;34;10m'
 
-BANNER = BLUE + '''\
+BANNER = BLUE + r'''
               __                           __
    __________/ /_  ____  _________ _____  / /__
   / ___/ ___/ __ \/ __ \/ ___/ __ `/ __ \/ //_/
@@ -353,9 +353,9 @@ def grab_banner(host, port):
 
 
 class PortScanner(masscan.PortScanner):
-    @property
-    def scan_result(self):
-        return self._scan_result
+  @property
+  def scan_result(self):
+    return self._scan_result
 
 
 def portscan():
