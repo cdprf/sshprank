@@ -7,8 +7,8 @@
 #                                           /___/ team                         #
 #                                                                              #
 # sshprank                                                                     #
-# A fast SSH mass-scanner, login cracker, banner grabber and password auth
-# checker tool using the python-masscan and shodan module.
+# A fast SSH mass-scanner, login cracker, banner grabber and password auth     #
+# checker tool using the python-masscan and shodan module.                     #
 #                                                                              #
 # NOTES                                                                        #
 # quick'n'dirty code                                                           #
