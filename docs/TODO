@@ -1,14 +1,42 @@
 ===> 1.x.x
 
-  [ ] add option to spoof client (paramiko) ssh-version
-  [ ] license ( admin panel where i can add working passwords )
-  [ ] domain / ips brute
-  [ ] working bingip2hosts
   [ ] anti fail2ban
   [ ] honeypot detection system
   [ ] sandbox detection
-  [ ] no ssh saves to another files ( it's good for user as SOCKS 4 )
-  [ ] anti dupe system ( no double )
+
+
+===> 1.6.0
+
+  [x] updated lists/* (optimized user/pws/combo wordlists: added cloud/devops
+      accounts, modern pw patterns, cross-combos like root:toor, pi:raspberry)
+  [x] bugfix: combo list parsing used split(':') causing passwords containing
+      ':' to be truncated - fixed with split(':', 1)
+  [x] bugfix: read_file() used .split() which broke passwords/usernames
+      containing spaces - fixed with .splitlines()
+  [x] bugfix: -e option only excluded the specific port instead of the entire
+      host - fixed with separate excluded_hosts set for host-level exclusion
+  [x] bugfix: -N with single -C command never executed the command at all -
+      exec_command() was inside the cmd_no_out guard
+  [x] bugfix: log_targets() was not thread-safe - concurrent login finds could
+      corrupt the output file - fixed with threading lock
+  [x] bugfix: grab_banner() crashed on non-UTF-8 banner bytes - fixed with
+      errors='replace'
+  [x] bugfix: check_pwauth() leaked socket when Transport() failed - added
+      sock.close() to finally block
+  [x] bugfix: portscan() error message printed literal 'str(err)' instead of
+      the actual error string
+  [x] bugfix: shodan page/limit passed as strings instead of int to api.search()
+  [x] bugfix: crack_rand_brute() (-Z) ignored combolist (-c), silently fell
+      back to root:root
+  [x] bugfix: -C file mode sent commands with trailing newline to exec_command()
+  [x] bugfix: -C stderr output was never read/shown - remote errors were
+      silently swallowed
+  [x] bugfix: -C file mode variable 'line' shadowed by inner output loop -
+      refactored to use 'cmd' and 'out'/'err' loop vars
+  [x] new mode: check sshd for password auth support (-p)
+  [x] renamed credential options: -u -> -U, -p -> -P
+  [x] dynamic kex/cipher/digest coverage via paramiko internals
+  [x] add option to spoof client (paramiko) ssh-version (-i)
 
 
 ===> 1.5.0
