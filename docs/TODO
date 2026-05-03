@@ -1,42 +1,159 @@
 ===> 1.x.x
 
-  [ ] anti fail2ban
-  [ ] honeypot detection system
-  [ ] sandbox detection
+  [ ] new feature
+      anti fail2ban
+  [ ] new feature
+      honeypot detection system
+  [ ] new featrue
+      sandbox detection
+
+
+===> 1.7.0
+
+  [x] new feature
+      live progress display in quiet mode: '[+] cracking X/Y (XX.XX%)'
+      based on userlist*passlist + combolist; '[+] cracking X attempts' for
+      -Z 0 infinite mode
+  [x] new feature
+      session save/restore via -w <file>: skip already-tried creds on resume
+      after Ctrl+C / -E / completion. JSON file with iteration position per
+      (host, port) + excluded sets + sha256 hashes for lax mismatch warning
+  [x] update
+      cidr range support for -h/-p, e.g. '192.168.1.0/24:22,2022'.
+      expanded into a temp host list, auto-cleaned on exit
+  [x] update
+      ip range support for -h/-p, e.g. '192.168.1.10-192.168.1.50:22'
+      or short octet form '10.0.0.1-50'. expanded into a temp host list,
+      auto-cleaned on exit
+  [x] update
+      -b now accepts the same target formats as -h: single host, host
+      list file, cidr, ip range. help text simplified for -b/-p
+  [x] update
+      remote command exec hardened: each cmd in own try/except, stdin
+      shutdown_write to unblock stdin-reading commands
+  [x] update
+      check_pwauth probe creds 'nobody:x' -> '__sshprank_probe__:<rand>'
+      to avoid collisions with real accounts
+  [x] update
+      dropped dead imports (as_completed, ALL_COMPLETED, deque) and
+      redundant 'global' decls
+  [x] update
+      stabilized opts default types: targets {} (not []), targetlist
+      None (not [])
+  [x] update
+      cidr/range expansion capped at 1M hosts to prevent oom/disk dos on
+      typos like /0 or huge ranges
+  [x] update
+      sigterm now triggers session save (handler raises keyboardinterrupt)
+  [x] update
+      session auto-saves to ./sshprank_session.json on ctrl+c / -E even
+      without -w. -w is only required to resume. -p/-b/-Z modes opt-out
+  [x] bugfix
+      double ctrl+c during cleanup produced ugly threading shutdown
+      traceback - finally now ignores signals during cleanup, then
+      os._exit bypasses the threadpool join wait
+  [x] update
+      skip duplicate initial root:root attempt when -U/-P/-c list given;
+      _creds_per_port() count adjusted accordingly
+  [x] bugfix
+      -p with single host wrongly dispatched to crack_single() - reordered
+      main() dispatch by mode flag first
+  [x] bugfix
+      -i ssh-version spoof had no effect - now sets Transport._CLIENT_ID
+      (instance __init__ overwrites local_version)
+  [x] bugfix
+      malformed combo lines killed process - now warned and skipped
+
+
+===> 1.6.1
+
+  [x] bugfix
+      false-positive logins on banner-echo sshds - added open_session() check
+  [x] bugfix
+      -e race losing first-login claim - fixed with lock + double-check
+  [x] bugfix
+      getopt dropped args after first non-option - switched to gnu_getopt +
+      reject leftover positional args
+  [x] bugfix
+      OOM on big target lists - bounded ThreadPool submission via
+      wait(FIRST_COMPLETED)
+  [x] bugfix
+      read_file() peaked 3-4x file size via mmap pipeline - replaced with
+      plain line iteration
+  [x] update
+      exec_command() hardcoded timeout=2 - now uses opts['ctimeout']
+  [x] bugfix
+      excluded[host] race/wipe in run_threads + crack_rand_brute - fixed
+      with setdefault
+  [x] bugfix
+      empty target lines produced ghost connects - skip them
+  [x] bugfix
+      log_targets() os._exit on write error killed process - now warn +
+      continue; also 'a+' -> 'a'
+  [x] update
+      bare except: in read_file/grab_banner/gen_ipv4addr - replaced with
+      specific exceptions
+  [x] update
+      crack_rand_brute() spawned pool per batch - one persistent pool with
+      bounded submission
+  [x] update
+      check_pwauth() re-imported paramiko.transport per call - hoisted to
+      module-level
+  [x] update
+      validate -x/-S/-X/-B (>=1), -r (>=1), -Z (>=0) - clear error instead
+      of silent no-op
 
 
 ===> 1.6.0
 
-  [x] updated lists/* (optimized user/pws/combo wordlists: added cloud/devops
+  [x] update
+      updated lists/* (optimized user/pws/combo wordlists: added cloud/devops
       accounts, modern pw patterns, cross-combos like root:toor, pi:raspberry)
-  [x] bugfix: combo list parsing used split(':') causing passwords containing
-      ':' to be truncated - fixed with split(':', 1)
-  [x] bugfix: read_file() used .split() which broke passwords/usernames
-      containing spaces - fixed with .splitlines()
-  [x] bugfix: -e option only excluded the specific port instead of the entire
-      host - fixed with separate excluded_hosts set for host-level exclusion
-  [x] bugfix: -N with single -C command never executed the command at all -
+  [x] bugfix
+      combo list parsing used split(':') causing passwords containing ':' to be
+      truncated - fixed with split(':', 1)
+  [x] bugfix
+      read_file() used .split() which broke passwords/usernames containing
+      spaces - fixed with .splitlines()
+  [x] bugfix
+      -e option only excluded the specific port instead of the entire host -
+      fixed with separate excluded_hosts set for host-level exclusion
+  [x] bugfix
+      -N with single -C command never executed the command at all -
       exec_command() was inside the cmd_no_out guard
-  [x] bugfix: log_targets() was not thread-safe - concurrent login finds could
-      corrupt the output file - fixed with threading lock
-  [x] bugfix: grab_banner() crashed on non-UTF-8 banner bytes - fixed with
+  [x] bugfix
+      log_targets() was not thread-safe - concurrent login finds could corrupt
+      the output file - fixed with threading lock
+  [x] bugfix
+      grab_banner() crashed on non-UTF-8 banner bytes - fixed with
       errors='replace'
-  [x] bugfix: check_pwauth() leaked socket when Transport() failed - added
-      sock.close() to finally block
-  [x] bugfix: portscan() error message printed literal 'str(err)' instead of
-      the actual error string
-  [x] bugfix: shodan page/limit passed as strings instead of int to api.search()
-  [x] bugfix: crack_rand_brute() (-Z) ignored combolist (-c), silently fell
-      back to root:root
-  [x] bugfix: -C file mode sent commands with trailing newline to exec_command()
-  [x] bugfix: -C stderr output was never read/shown - remote errors were
-      silently swallowed
-  [x] bugfix: -C file mode variable 'line' shadowed by inner output loop -
-      refactored to use 'cmd' and 'out'/'err' loop vars
-  [x] new mode: check sshd for password auth support (-p)
-  [x] renamed credential options: -u -> -U, -p -> -P
-  [x] dynamic kex/cipher/digest coverage via paramiko internals
-  [x] add option to spoof client (paramiko) ssh-version (-i)
+  [x] bugfix
+      check_pwauth() leaked socket when Transport() failed - added sock.close()
+      to finally block
+  [x] bugfix
+      portscan() error message printed literal 'str(err)' instead of the actual
+      error string
+  [x] bugfix
+      shodan page/limit passed as strings instead of int to api.search()
+  [x] bugfix
+      crack_rand_brute() (-Z) ignored combolist (-c), silently fell back to
+      'root:root'
+  [x] bugfix
+      -C file mode sent commands with trailing newline to exec_command()
+  [x] bugfix
+      -C stderr output was never read/shown - remote errors were silently
+      swallowed
+  [x] bugfix
+      -C file mode variable 'line' shadowed by inner output loop - refactored to
+      use 'cmd' and 'out'/'err' loop vars
+  [x] new feature:
+      check sshd for password auth support (-p)
+  [x] update
+      renamed credential options: -u -> -U, -p -> -P
+  [x] update
+      dynamic kex/cipher/digest coverage via paramiko internals
+  [x] new feature
+      add option to spoof client (paramiko) ssh-version (-i)
 
 
 ===> 1.5.0
@@ -51,144 +168,191 @@
 
 ===> 1.4.4
 
-  [x] bugfix: port variable leak in run_threads() - inner executor was outside
-      the port loop, causing credential lists to only be tested against the
-      last port when multiple ports were specified
-  [x] bugfix: NameError on undefined 'futures' in run_threads() when -E was
-      used - removed dead code block (crack_login() already calls os._exit())
-  [x] bugfix: grab_banner() crash when create_connection() fails - s was
-      unassigned in finally block
-  [x] bugfix: publickey-only port exclusion was gated behind verbose mode,
-      now always applied
-  [x] uncommented SSHException and Exception logging (verbose mode)
+  [x] bugfix
+      port variable leak in run_threads() - inner executor was outside the port
+      loop, causing credential lists to only be tested against the last port
+      when multiple ports were specified
+  [x] bugfix
+      NameError on undefined 'futures' in run_threads() when -E was used -
+      removed dead code block (crack_login() already calls os._exit())
+  [x] bugfix
+      grab_banner() crash when create_connection() fails - s was unassigned in
+      finally block
+  [x] bugfix
+      publickey-only port exclusion was gated behind verbose mode, now always
+      applied
+  [x] update
+      uncommented SSHException and Exception logging (verbose mode)
 
 
 ===> 1.4.3
 
-  [x] bugfix: fixed Python's "SyntaxWarning"
-  [x] updated COPYRIGHT info
+  [x] bugfix
+      fixed Python's "SyntaxWarning"
+  [x] update
+      updated COPYRIGHT info
 
 
 ===> 1.4.2
 
-  [x] bugfix: banner option
-  [x] updated lists/*
+  [x] bugfix
+      banner option
+  [x] update
+      updated lists/*
 
 
 ===> 1.4.1
 
-  [x] updated help() and README.md (old options were present)
+  [x] update
+      updated help() and README.md (old options were present)
 
 
 ===> 1.4.0
 
-  [x] updated lists/* (added more default passwords and usernames)
-  [x] add 'exclude host after first login was found' option (-e)
-  [x] add 'exit sshprank after first login was found' option (-E)
-  [x] swap options: '-C' -> '-c'
-  [x] merge options: '-l' -> '-h', '-U' -> '-u', '-P' -> '-p'
+  [x] update
+      updated lists/* (added more default passwords and usernames)
+  [x] new feature
+      add 'exclude host after first login was found' option (-e)
+  [x] new feature
+      add 'exit sshprank after first login was found' option (-E)
+  [x] update
+      swap options: '-C' -> '-c'
+  [x] update
+      merge options: '-l' -> '-h', '-U' -> '-u', '-P' -> '-p'
 
 
 ===> 1.3.5
 
-  [x] remove pf.close() call
+  [x] update
+      remove pf.close() call
 
 
 ===> 1.3.4
 
-  [x] remove open() calls
+  [x] update
+      remove open() calls
 
 
 ===> 1.3.3
 
-  [x] use mmap to read wordlist files
+  [x] update
+      use mmap to read wordlist files
 
 
 ===> 1.3.2
 
-  [x] decrease default hosts threads num
+  [x] update
+      decrease default hosts threads num
 
 
 ===> 1.3.1
 
-  [x] close file descriptor...
+  [x] bugfix
+      close file descriptor...
 
 
 ===> 1.3.0
 
-  [x] updated default thread nums for host, service and login.
-  [x] add new option to not output ssh command results ('-N')
-  [x] read and run commands from file on target (github: #5)
-  [x] fix high memory usage (github: #9)
+  [x] update
+      updated default thread nums for host, service and login.
+  [x] new feature
+      add new option to not output ssh command results ('-N')
+  [x] new feature
+      read and run commands from file on target (github: #5)
+  [x] bugfix
+      fix high memory usage (github: #9)
 
 
 ===> 1.2.3
 
-  [x] increase default auth and connect timeout
-  [x] use 'info' for 'saved found sshds.txt' rather than 'good'
-  [x] use status() for shodan_search()
-  [x] updated short description in script file
+  [x] update
+      increase default auth and connect timeout
+  [x] update
+      use 'info' for 'saved found sshds.txt' rather than 'good'
+  [x] update
+      use status() for shodan_search()
+  [x] update
+      updated short description in script file
 
 
 ===> 1.2.2
 
-  [x] call log() only in one place after AuthenticationException occurs
-  [x] skip further actions if targets file could not be read ('-l' option)
+  [x] update
+      call log() only in one place after AuthenticationException occurs
+  [x] update
+      skip further actions if targets file could not be read ('-l' option)
 
 
 ===> 1.2.1
 
-  [x] only print exclusion infos in verbose mode
-  [x] use spin() output for scanning and cracking targets
-  [x] update wordings in the examples
+  [x] update
+      only print exclusion infos in verbose mode
+  [x] update
+      use spin() output for scanning and cracking targets
+  [x] update
+      update wordings in the examples
 
 
 ===> 1.2.0
 
-  [x] exclude targets if service is not running or pubkey auth only is supported
+  [x] update
+      exclude targets if service is not running or pubkey auth only is supported
 
 
 ===> 1.1.3
 
-  [x] print small info if login found (for non-verbose mode)
-  [x] add uid (root) check for '-m' option
-  [x] change wordings a bit
+  [x] update
+      print small info if login found (for non-verbose mode)
+  [x] new feature
+      add uid (root) check for '-m' option
+  [x] update
+      change wordings a bit
 
 
 ===> 1.1.0
 
-  [x] fix color codes
-  [x] use new python format style (f'{foo}')
-  [x] add leet and important ascii banner
+  [x] bugfix
+      fix color codes
+  [x] update
+      use new python format style (f'{foo}')
+  [x] update
+      add leet and important ascii banner
 
 
 ===> 1.0.0
 
-  [x] mark stable + release
+  [x] update
+      mark stable + release
 
 
 ===> 0.0.3
 
-  [x] implement remote ssh command exec
-  [x] implement random target cracking
-  [x] implement read timeout for banner grabbing
-  [x] print found login only if '-v' was chosen
-  [x] os exit on found login
-  [x] remove colorama bullshit
-  [x] fix banner grab issue (non-banner sshds, e.g. 'open' only were ignored)
-  [x] by default don't use masscan's --banner option
+  [x] new feature
+      implement remote ssh command exec
+  [x] new feature
+      implement random target cracking
+  [x] new feature
+      implement read timeout for banner grabbing
+  [x] update
+      print found login only if '-v' was chosen
+  [x] update
+      os exit on found login
+  [x] update
+      remove colorama bullshit
+  [x] bugfix
+      fix banner grab issue (non-banner sshds, e.g. 'open' only were ignored)
+  [x] update
+      by default don't use masscan's --banner option
 
 
 ===> 0.0.2
 
-  [x] use deque() rather than lists for MT
+  [x] update
+      use deque() rather than lists for MT
 
 
 ===> 0.0.1
 
-  [x] standalone file with all libraries included
-  [x] asynchron multithreaded
-  [x] grab banners
-  [x] choose port for brute
-  [x] initial version
+  [x] initial
+      initial release
 

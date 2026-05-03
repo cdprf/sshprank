@@ -16,6 +16,8 @@ paused.conf
 __pycache__
 shadow
 sshds.txt
+sshprank_session.json
+random_targets.txt
 *.swn
 *.swo
 *.swp
